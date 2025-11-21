@@ -1,0 +1,47 @@
+{
+  "version": "0.0",
+  "description": "Canonical rules for system-level transactions in BachiCoin. Ensures closed-system conservation of value.",
+  "system_wallets": {
+    "mint":    "<SYSTEM_MINT_ADDRESS>",
+    "burn":    "<SYSTEM_BURN_ADDRESS>",
+    "pool":    "<SYSTEM_POOL_ADDRESS>"
+  },
+
+  "rules": {
+    "mint": {
+      "from_address": "NULL",
+      "to_address":   "system_wallets.mint",
+      "notes": "Creates new coins. Only source of new supply."
+    },
+
+    "burn": {
+      "from_address": "user_or_system",
+      "to_address":   "system_wallets.burn",
+      "notes": "Coins permanently removed from supply."
+    },
+
+    "stake": {
+      "from_address": "user",
+      "to_address":   "system_wallets.pool",
+      "notes": "User deposits stake into consensus pool."
+    },
+
+    "unstake": {
+      "from_address": "system_wallets.pool",
+      "to_address":   "user",
+      "notes": "Returns stake principal back to user."
+    },
+
+    "reward": {
+      "from_address": "system_wallets.pool",
+      "to_address":   "user",
+      "notes": "Consensus/staking rewards distributed from pool."
+    },
+
+    "slash": {
+      "from_address": "user",
+      "to_address":   "system_wallets.pool",
+      "notes": "Penalty deducted from validator stake."
+    }
+  }
+}

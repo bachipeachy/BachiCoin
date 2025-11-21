@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "BachiCoin"
+version = "0.1.0"
+description = "BachiCoin: clean rebuild of BachiCoin with minimal tech debt"
+authors = [
+    { name = "Bachi", email = "bachipeachy@gmail.com" }
+]
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["BachiCoin*"]
