@@ -30,6 +30,13 @@ logging.basicConfig(level=logging.INFO, format='%(message)s')
 log = logging.getLogger()
 
 
+def _get_block_height(block: Optional[Dict]) -> int:
+    """Safely get height from either a flat or nested block."""
+    if not block:
+        return -1
+    return block.get("header", block).get("height", -1)
+
+
 def process_block(
         all_node_contexts: Dict[int, NodeContext],
         address_to_node_map: Dict[str, int],
@@ -79,8 +86,8 @@ def run_postprocess(
         node_states.append({
             "node_id": node_id,
             "context": context,
-            "finalized_height": finalized_block['height'] if finalized_block else -1,
-            "justified_height": justified_block['height'] if justified_block else -1,
+            "finalized_height": _get_block_height(finalized_block),
+            "justified_height": _get_block_height(justified_block),
             "height": height
         })
 
@@ -110,7 +117,7 @@ def run_postprocess(
         current_block = blockchain_service.get_chain_tip()
         while current_block and not current_block.get("state_processed"):
             blocks_to_process.insert(0, current_block) # Insert at the beginning to maintain forward order.
-            parent_hash = current_block.get("parent_hash")
+            parent_hash = current_block.get("header", current_block).get("parent_hash")
             if not parent_hash or parent_hash == "0x" + "0" * 64:
                 break
             current_block = blockchain_service.get_block(parent_hash)

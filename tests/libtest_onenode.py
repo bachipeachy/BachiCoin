@@ -2,7 +2,7 @@
 import asyncio
 import shutil
 from pathlib import Path
-from typing import Dict, Any, List, Set
+from typing import Dict, Any, List, Set, Optional
 
 from BachiCoin.api_public import (
     user_lib_api,
@@ -15,7 +15,7 @@ from BachiCoin.api_public import (
     crossmodule_lib_api,
 )
 from tests.test_config import dirs
-from tests.libtest_data import REGULAR_USERS, TRANSACTION_SCHEDULE
+from tests.libtest_data import REGULAR_USERS, TRANSACTION_SCHEDULE, calculate_ground_truth_balances
 
 # --- Test Configuration ---
 TARGET_SLOTS = 64
@@ -66,85 +66,74 @@ def display_per_node_summary(node_context: crossmodule_lib_api.NodeContext):
 def capture_or_display_summary(
         node_context: crossmodule_lib_api.NodeContext,
         header: str,
-        is_final_summary: bool = False
+        is_final_summary: bool = False,
+        expected_balances: Optional[Dict[str, Dict[str, float]]] = None
 ):
     """Captures the initial system state or displays a before-and-after comparison for the single node."""
     global before_state_summary
 
-    all_users = []
-    all_user_ids = set()
-    for user in user_lib_api.list_users(node_context.user_service):
-        if user['user_id'] not in all_user_ids:
-            all_users.append(user)
-            all_user_ids.add(user['user_id'])
-
-    current_user_balances = {}
+    # --- 1. Get Current State ---
+    all_users = user_lib_api.list_users(node_context.user_service)
+    
+    current_user_wallets = {}
     for user in all_users:
-        user_id = user['user_id']
-        total_balance = 0.0
-        user_wallets = wallet_lib_api.list_wallets_by_user(node_context.wallet_service, user_id)
+        user_name = f"{user.get('first_name')} {user.get('last_name')}"
+        current_user_wallets[user_name] = {}
+        user_wallets = wallet_lib_api.list_wallets_by_user(node_context.wallet_service, user['user_id'])
         for wallet in user_wallets:
-            total_balance += wallet.get('balance', 0.0)
-        
-        current_user_balances[user_id] = {
-            "user_id": user_id,
-            "name": f"{user.get('first_name')} {user.get('last_name')}",
-            "total_balance": total_balance
-        }
+            current_user_wallets[user_name][wallet['wallet_type']] = wallet.get('balance', 0.0)
 
-    # Add system wallets (pool and burn)
-    all_users_list = user_lib_api.list_users(node_context.user_service)
-    ledger_system_user = next((u for u in all_users_list if f"{u.get('first_name')} {u.get('last_name')}" == "Ledger System"), None)
-    if ledger_system_user:
-        ledger_system_wallets = wallet_lib_api.list_wallets_by_user(node_context.wallet_service, ledger_system_user['user_id'])
-        for wallet in ledger_system_wallets:
-            if wallet['wallet_type'] in ['pool', 'burn']:
-                wallet_name = wallet['wallet_type']
-                current_user_balances[wallet_name] = {
-                    "user_id": wallet_name,
-                    "name": f"System {wallet_name.capitalize()} Wallet",
-                    "total_balance": wallet.get('balance', 0.0)
-                }
-
-    current_ledger_summary = postprocess_lib_api.get_ledger_summary({0: node_context}) # Pass as dict for compatibility
-
+    # --- 2. Display Logic ---
     if not is_final_summary:
         print(f"\n--- {header} ---")
-        before_state_summary['users'] = {uid: summary for uid, summary in current_user_balances.items()}
-        before_state_summary['ledger'] = current_ledger_summary
-
-        for user in sorted(current_user_balances.values(), key=lambda u: u['name']):
-            print(f"  👤 {user['name']:<22} | Balance: {user['total_balance']:.{postprocess_lib_api.DISPLAY_DECIMAL_PLACES}f} BACHI")
+        # For the "before" state, we just need the total user balances
+        before_state_summary['users'] = {}
+        for user_name, wallets in current_user_wallets.items():
+            total_balance = sum(wallets.values())
+            before_state_summary['users'][user_name] = total_balance
+            print(f"  👤 {user_name:<22} | Balance: {total_balance:.{postprocess_lib_api.DISPLAY_DECIMAL_PLACES}f} BACHI")
+        
+        total_ledger_balance = sum(before_state_summary['users'].values())
         print("--------------------------------------------------")
-        print(f"  📊 Total Ledger Balance: {current_ledger_summary['total_balance']:.{postprocess_lib_api.DISPLAY_DECIMAL_PLACES}f} BACHI")
+        print(f"  📊 Total Ledger Balance: {total_ledger_balance:.{postprocess_lib_api.DISPLAY_DECIMAL_PLACES}f} BACHI")
         print("--------------------------------------------------\n")
     else:
         print(f"\n--- {header} ---")
-        print(f"{'👤 User':<22} | {'Before':>18} | {'After':>18} | {'Change':>18}")
-        print("-" * 80)
+        print(f"{'👤 User /  Wallet':<28} | {'Actual':>18} | {'Expected':>18} | {'Diff':>18}")
+        print("-" * 88)
 
-        sorted_users = sorted(current_user_balances.values(), key=lambda u: u['name'])
+        total_actual = 0.0
+        total_expected = 0.0
 
-        for user_summary in sorted_users:
-            uid = user_summary['user_id']
-            name = user_summary['name']
-            before_balance = before_state_summary.get('users', {}).get(uid, {}).get('total_balance', 0.0)
-            after_balance = user_summary['total_balance']
-            change = after_balance - before_balance
+        for user_name in sorted(current_user_wallets.keys()):
+            wallets = current_user_wallets[user_name]
+            user_actual_total = sum(wallets.values())
+            user_expected_total = sum(expected_balances.get(user_name, {}).values()) if expected_balances else 0.0
+            
+            print(f"👤 {user_name:<25} | {user_actual_total:18,.{postprocess_lib_api.DISPLAY_DECIMAL_PLACES}f} | {user_expected_total:18,.{postprocess_lib_api.DISPLAY_DECIMAL_PLACES}f} | {'':>18}")
 
-            print(
-                f"{name:<22} | {before_balance:18,.{postprocess_lib_api.DISPLAY_DECIMAL_PLACES}f} | {after_balance:18,.{postprocess_lib_api.DISPLAY_DECIMAL_PLACES}f} | {change:+18,.{postprocess_lib_api.DISPLAY_DECIMAL_PLACES}f}")
+            for wallet_type in sorted(wallets.keys()):
+                actual_balance = wallets[wallet_type]
+                expected_balance = expected_balances.get(user_name, {}).get(wallet_type, 0.0) if expected_balances else 0.0
+                diff = actual_balance - expected_balance
+                
+                diff_str = f"{diff:+.{postprocess_lib_api.DISPLAY_DECIMAL_PLACES}f}"
+                if abs(diff) > 1e-9:
+                    diff_str = f"❌ {diff_str}"
 
-        print("-" * 80)
-
-        before_ledger = before_state_summary.get('ledger', {})
-        before_total = before_ledger.get('total_balance', 0.0)
-        after_total = current_ledger_summary['total_balance']
-        total_change = after_total - before_total
-
-        print(
-            f"{'📊 Total Ledger Balance':<22} | {before_total:18,.{postprocess_lib_api.DISPLAY_DECIMAL_PLACES}f} | {after_total:18,.{postprocess_lib_api.DISPLAY_DECIMAL_PLACES}f} | {total_change:+18,.{postprocess_lib_api.DISPLAY_DECIMAL_PLACES}f}")
-        print("-" * 80)
+                print(f"  - {wallet_type:<23} | {actual_balance:18,.{postprocess_lib_api.DISPLAY_DECIMAL_PLACES}f} | {expected_balance:18,.{postprocess_lib_api.DISPLAY_DECIMAL_PLACES}f} | {diff_str}")
+            
+            total_actual += user_actual_total
+            total_expected += user_expected_total
+        
+        print("-" * 88)
+        total_diff = total_actual - total_expected
+        total_diff_str = f"{total_diff:+.{postprocess_lib_api.DISPLAY_DECIMAL_PLACES}f}"
+        if abs(total_diff) > 1e-9:
+            total_diff_str = f"❌ {total_diff_str}"
+            
+        print(f"{'📊 Total Ledger Balance':<28} | {total_actual:18,.{postprocess_lib_api.DISPLAY_DECIMAL_PLACES}f} | {total_expected:18,.{postprocess_lib_api.DISPLAY_DECIMAL_PLACES}f} | {total_diff_str}")
+        print("-" * 88)
 
 
 async def bootstrap_bachicoin() -> crossmodule_lib_api.NodeContext:
@@ -284,7 +273,9 @@ async def main():
         postprocess_lib_api.run_postprocess({0: node_context}, single_node_address_to_node_map)
         print("✅ Final Post-Processing Complete.")
 
-        capture_or_display_summary(node_context, "SYSTEM STATE AFTER TEST", is_final_summary=True)
+        # Calculate ground truth balances
+        expected_final_balances = calculate_ground_truth_balances()
+        capture_or_display_summary(node_context, "SYSTEM STATE AFTER TEST", is_final_summary=True, expected_balances=expected_final_balances)
         
         # --- Add the new per-node summary ---
         display_per_node_summary(node_context)
